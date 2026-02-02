@@ -1,0 +1,293 @@
+' Copy into Solidworks macro editor - and hit run
+
+Dim swApp As Object
+Dim currentFile As String
+Dim swModel As SldWorks.ModelDoc2
+Dim runfilepath As String
+Dim runfilename As String
+Const ForReading = 1
+Const ForWriting = 2
+Const ForAppending = 8
+Sub main()
+
+    runfilename = "runfile.txt"
+    runfilepath = Environ("AppData") + "\Monarch\" + runfilename
+
+    Set swApp = Application.SldWorks
+    
+    Dim Running As Boolean
+    Running = True
+    
+    While Running
+        OpenRunFile
+        
+        If currentFile = "" Then
+            Running = False
+        Else
+            Debug.Print "Target File"
+            Debug.Print currentFile
+            
+            ' Open the target file in solidworks
+            
+            OpenTargetFile
+        
+            ' Update the run file to remove the specific entry
+            UpdateRunFile
+        End If
+        
+        ' Reset current file
+        currentFile = ""
+    Wend
+End Sub
+
+Sub UpdateRunFile()
+    Dim objFSO
+    Const ForReading = 1
+    Const ForWriting = 2
+    Dim objTS 'define a TextStream object
+    Dim strContents As String
+    Dim fileSpec As String
+    
+    Set objFSO = CreateObject("Scripting.FileSystemObject")
+    Set objTS = objFSO.OpenTextFile(runfilepath, ForReading)
+    strContents = objTS.ReadAll
+    strContents = Replace(strContents, currentFile, "---EXTRACTED===" & currentFile)
+    objTS.Close
+    
+    Set objTS = objFSO.OpenTextFile(runfilepath, ForWriting)
+    objTS.Write strContents
+    objTS.Close
+End Sub
+
+
+Function FileExt(str)
+    FileExt = "." & Right(str, Len(str) - InStrRev(str, "."))
+End Function
+
+Function FileExtNoDot(str)
+    FileExtNoDot = Right(str, Len(str) - InStrRev(str, "."))
+End Function
+
+Sub OpenTargetFile()
+
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Debug.Print "Openeing Target File"
+
+    
+    Dim resultFile As String
+    resultFile = Replace(currentFile, FileExt(currentFile), "_" + FileExtNoDot(currentFile) + "_MMD.txt")
+    If fso.FileExists(resultFile) Then
+        Set FileToWrite = fso.OpenTextFile(resultFile, ForWriting)
+    Else
+        Set FileToWrite = fso.CreateTextFile(resultFile)
+    End If
+    
+
+    Dim fileerror As Long
+    Dim filewarning As Long
+    If LowerEndsWith(currentFile, "sldprt") Then
+        Debug.Print "Opening part"
+        Set swModel = swApp.OpenDoc6(currentFile, swDocPART, swOpenDocOptions_Silent, "", fileerror, filewarning)
+    ElseIf LowerEndsWith(currentFile, "sldasm") Then
+        Debug.Print "Opening assembly"
+        Set swModel = swApp.OpenDoc6(currentFile, swDocASSEMBLY, swOpenDocOptions_Silent, "", fileerror, filewarning)
+    ElseIf LowerEndsWith(currentFile, "slddrw") Then
+        Debug.Print "Opening drawing"
+        Set swModel = swApp.OpenDoc6(currentFile, swDocDRAWING, swOpenDocOptions_Silent, "", fileerror, filewarning)
+    End If
+    
+    
+    Dim swExtension As ModelDocExtension
+    Set swExtension = swModel.Extension
+    
+    
+    Dim customPropManager As CustomPropertyManager
+    Set customPropManager = swExtension.CustomPropertyManager("")
+    
+    Dim lRetVal As Long
+    Dim vPropNames As Variant
+    Dim vPropTypes As Variant
+    Dim vPropValues As Variant
+    Dim ValOut As String
+    Dim ResolvedValOut As String
+    Dim wasResolved As Boolean
+    Dim linkToProp As Boolean
+    Dim resolved As Variant
+    Dim linkProp As Variant
+    Dim nNbrProps As Long
+    Dim j As Long
+    Dim i As Long
+    Dim custPropType As Long
+    Dim bRet As Boolean
+    
+    nNbrProps = customPropManager.Count
+   
+
+    ' Gets the custom properties
+  
+    FileToWrite.WriteLine "---FILEPATH---" & currentFile
+    ' For each custom property, print its name, type, and evaluated value
+    
+    lRetVal = customPropManager.GetAll3(vPropNames, vPropTypes, vPropValues, resolved, linkProp)
+    
+    For j = 0 To nNbrProps - 1
+        custPropType = customPropManager.GetType2(vPropNames(j))
+        FileToWrite.WriteLine "---PROPERTY===" & vPropNames(j) & "---VALUE===" & vPropValues(j)
+    Next j
+    
+    FileToWrite.WriteLine "---PROPERTY===" & "{filename}" & "---VALUE===" & Dir(currentFile)
+    FileToWrite.WriteLine "---PROPERTY===" & "{title}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoTitle)
+    FileToWrite.WriteLine "---PROPERTY===" & "{subject}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoSubject)
+    FileToWrite.WriteLine "---PROPERTY===" & "{savedate}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoSaveDate)
+    FileToWrite.WriteLine "---PROPERTY===" & "{comment}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoComment)
+    FileToWrite.WriteLine "---PROPERTY===" & "{keywords}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoKeywords)
+    FileToWrite.WriteLine "---PROPERTY===" & "{author}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoAuthor)
+    
+    FileToWrite.WriteLine "---ENDPROPERTIES---"
+
+    Dim tempfile As String
+    tempfile = ""
+    If (swModel.GetType = swDocPART) Then
+        ' Get all of the configurations
+        ' Save out as temp files
+        ' Add configurations to the metadata
+        Dim value As Integer
+        configNames = swModel.GetConfigurationNames
+        If UBound(configNames) > 1 Then
+            For i = 0 To UBound(configNames)
+                configName = configNames(i)
+                swModel.ShowConfiguration2 configName
+                
+                tempfile = Replace(currentFile, FileExt(currentFile), "_" + configName + FileExt(currentFile))
+                
+                value = swModel.SaveAsSilent(tempfile, True)
+                ' Activate the config
+                ' Make a new tempfile
+                ' Save a copy
+                FileToWrite.WriteLine "---CONFIGURATION===" & configName & "---PATH===" & tempfile
+            Next i
+        End If
+      
+        
+        
+    ElseIf (swModel.GetType = swDocASSEMBLY) Then
+        Debug.Print "Reading Assembly"
+        Dim swRootComp As SldWorks.Component2
+        Dim swConf As SldWorks.Configuration
+        Set swConf = swModel.GetActiveConfiguration
+        Set swRootComp = swConf.GetRootComponent
+        OutputCompXform swRootComp, FileToWrite
+        
+    ElseIf (swModel.GetType = swDocDRAWING) Then
+        ' Output drawing data
+        ' Export to PDF
+        Dim swExportPDFData As SldWorks.ExportPdfData
+        Dim strFilename As String
+        strFilename = swModel.GetPathName
+        strFilename = Left(strFilename, Len(strFilename) - 6) & "pdf"
+        Set swExportPDFData = swApp.GetExportFileData(1)
+        swModel.Extension.SaveAs strFilename, 0, 0, swExportPDFData, 0, 0
+        FileToWrite.WriteLine "---PDF===" & strFilename
+    End If
+    
+    
+    
+    
+    
+    swApp.CloseDoc swModel.GetTitle
+    
+    ' Write the metadata file
+    
+    FileToWrite.Close
+    
+    
+    
+End Sub
+
+Function LowerEndsWith(strInput As String, suffix As String) As Boolean
+    ' Returns True if the lowercase version of strInput ends with "sldprt"
+    Dim lowerStr As String
+    lowerStr = LCase(strInput)
+    LowerEndsWith = (Right(lowerStr, Len(suffix)) = suffix)
+End Function
+
+Sub OutputCompXform(swComp As SldWorks.Component2, FileToWrite As Variant)
+
+    Dim vChild                      As Variant
+    Dim swChildComp                 As SldWorks.Component2
+    Dim sPadStr                     As String
+    Dim swCompXform                 As SldWorks.MathTransform
+    Dim vXform                      As Variant
+    Dim i                           As Long
+    ' Null for root component
+
+    vChild = swComp.GetChildren
+
+    For i = 0 To UBound(vChild)
+
+
+        Set swChildComp = vChild(i)
+        Set swCompXform = swChildComp.Transform2
+        vXform = swCompXform.ArrayData
+        FileToWrite.WriteLine "---COMPONENT===" & swChildComp.Name2 & "---PATH===" & swChildComp.GetPathName + "---TRANSFORM===" & str(vXform(0)) + ", " & str(vXform(1)) + ", " & str(vXform(2)) + ", " & str(vXform(3)) + ", " & str(vXform(4)) + ", " & str(vXform(5)) + ", " & str(vXform(6)) + ", " & str(vXform(7)) + ", " & str(vXform(8)) + ", " & str(vXform(9)) + ", " & str(vXform(10)) + ", " & str(vXform(11)) + ", " & str(vXform(12)) + ", " & str(vXform(13)) + ", " & str(vXform(14)) + ", " & str(vXform(15))
+        Debug.Print "Component = " & swChildComp.Name2 & " (" & swChildComp.ReferencedConfiguration & ")"
+        AppendRunFileComponent swChildComp.GetPathName
+    Next i
+
+End Sub
+
+Sub AppendRunFileComponent(path As String)
+
+    
+    Dim objFSO
+    Dim objTS 'define a TextStream object
+    Dim strContents As String
+    Dim fileSpec As String
+    
+    Set objFSO = CreateObject("Scripting.FileSystemObject")
+    Set objTS = objFSO.OpenTextFile(runfilepath, ForReading)
+    strContents = objTS.ReadAll
+    objTS.Close
+    
+    Pos = InStr(1, strContents, path)
+    If Pos = 0 Then
+        Set objTS = objFSO.OpenTextFile(runfilepath, ForAppending)
+        objTS.WriteLine path
+        objTS.Close
+    End If
+
+    objTS.Close
+    
+ 
+
+End Sub
+
+Sub OpenRunFile()
+    currentFile = ""
+    Debug.Print "Reading Run File"
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set txtStream = fso.OpenTextFile(runfilepath, ForReading, False)
+    
+    Dim processFiles As Boolean
+
+    Dim StrContent As String
+    StrContent = ""
+    processFiles = False
+    
+    Do While Not txtStream.AtEndOfStream
+        Line = txtStream.ReadLine
+          
+        Debug.Print "Reading Line - " + Line
+        If processFiles And Not InStr(Line, "---EXTRACTED===") = 1 And Len(Line) > 1 Then
+            currentFile = Line
+        End If
+        If Line = "---FILES" Then
+            processFiles = True
+        End If
+    Loop
+    txtStream.Close
+
+
+End Sub
