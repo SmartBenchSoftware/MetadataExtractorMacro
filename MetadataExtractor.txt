@@ -1,5 +1,4 @@
 ' Copy into Solidworks macro editor - and hit run
-
 Dim swApp As Object
 Dim currentFile As String
 Dim swModel As SldWorks.ModelDoc2
@@ -8,10 +7,26 @@ Dim runfilename As String
 Const ForReading = 1
 Const ForWriting = 2
 Const ForAppending = 8
-Sub main()
 
+Dim IGNORETOOLBOX As Boolean
+Dim UNSUPRESSASSEMBLY As Boolean
+Dim IGNOREMISSING As Boolean
+Dim DRAWINGSASPDFvDXF As Boolean
+
+Const IGNORETOOLBOX_HEADER = "IGNORETOOLBOX"
+Const UNSUPRESSASSEMBLY_HEADER = "UNSUPRESSASSEMBLY"
+Const DRAWINGSASPDFvDXF_HEADER = "DRAWINGSASPDFvDXF"
+
+Dim FileSkipped As Boolean
+
+Sub main()
+    FileSkipped = False
+    IGNORETOOLBOX = False
+    UNSUPRESSASSEMBLY = False
+    DRAWINGSASPDFvDXF = False
+    
     runfilename = "runfile.txt"
-    runfilepath = Environ("AppData") + "\Monarch\" + runfilename
+    runfilepath = Environ("AppData") + "\SmartBench Software\" + runfilename
 
     Set swApp = Application.SldWorks
     
@@ -34,6 +49,7 @@ Sub main()
             ' Update the run file to remove the specific entry
             UpdateRunFile
         End If
+        FileSkipped = False
         
         ' Reset current file
         currentFile = ""
@@ -51,7 +67,16 @@ Sub UpdateRunFile()
     Set objFSO = CreateObject("Scripting.FileSystemObject")
     Set objTS = objFSO.OpenTextFile(runfilepath, ForReading)
     strContents = objTS.ReadAll
-    strContents = Replace(strContents, currentFile, "---EXTRACTED===" & currentFile)
+    
+    Debug.Print "Updating Runfile"
+    Debug.Print FileSkipped
+    
+    If FileSkipped Then
+       strContents = Replace(strContents, currentFile, "---ERROR===" & currentFile)
+    Else
+       strContents = Replace(strContents, currentFile, "---EXTRACTED===" & currentFile)
+    End If
+ 
     objTS.Close
     
     Set objTS = objFSO.OpenTextFile(runfilepath, ForWriting)
@@ -72,7 +97,14 @@ Sub OpenTargetFile()
 
 
     Set fso = CreateObject("Scripting.FileSystemObject")
-    Debug.Print "Openeing Target File"
+    Debug.Print "Opening Target File"
+
+     If Not fso.FileExists(currentFile) Then
+        FileSkipped = True
+        Debug.Print "Skipping File" + currentFile
+        Exit Sub
+    End If
+        
 
     
     Dim resultFile As String
@@ -89,9 +121,34 @@ Sub OpenTargetFile()
     If LowerEndsWith(currentFile, "sldprt") Then
         Debug.Print "Opening part"
         Set swModel = swApp.OpenDoc6(currentFile, swDocPART, swOpenDocOptions_Silent, "", fileerror, filewarning)
+        
+        Set modelDocExt = part.Extension
+        ret = modelDocExt.ToolboxPartType
+        If IGNORETOOLBOX And ret > 0 Then
+            FileSkipped = True
+            Debug.Print "Skipping toolbox File" + currentFile
+            Exit Sub
+        End If
+        
+        
     ElseIf LowerEndsWith(currentFile, "sldasm") Then
         Debug.Print "Opening assembly"
         Set swModel = swApp.OpenDoc6(currentFile, swDocASSEMBLY, swOpenDocOptions_Silent, "", fileerror, filewarning)
+        If UNSUPRESSASSEMBLY Then
+            vComponents = swModel.GetComponents(True)
+    
+            ' Loop through all components
+            For Each swComponent In vComponents
+                ' Check if the component is suppressed
+                If swComponent.IsSuppressed Then
+                    ' Select the component and unsuppress it
+                    swComponent.Select False ' Select the component without clearing previous selections
+                    swModel.EditUnsuppress2 ' Unsuppress selected component(s)
+                End If
+            Next swComponent
+        End If
+        
+        
     ElseIf LowerEndsWith(currentFile, "slddrw") Then
         Debug.Print "Opening drawing"
         Set swModel = swApp.OpenDoc6(currentFile, swDocDRAWING, swOpenDocOptions_Silent, "", fileerror, filewarning)
@@ -179,17 +236,30 @@ Sub OpenTargetFile()
         Set swRootComp = swConf.GetRootComponent
         OutputCompXform swRootComp, FileToWrite
         
-    ElseIf (swModel.GetType = swDocDRAWING) Then
-        ' Output drawing data
+ElseIf (swModel.GetType = swDocDRAWING) Then
+    ' Output drawing data
+    Dim strFilename As String
+
+    If Not DRAWINGSASPDFvDXF Then
+        ' Export to DXF
+         Dim nErrors As Long
+         Dim nWarnings As Long
+
+        strFilename = swModel.GetPathName
+        strFilename = Left(strFilename, Len(strFilename) - 6) & "dxf"
+        Debug.Print strFilename
+        swModel.Extension.SaveAs3 strFilename, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, Nothing, nErrors, nWarnings
+        FileToWrite.WriteLine "---PDF===" & strFilename
+    Else
         ' Export to PDF
         Dim swExportPDFData As SldWorks.ExportPdfData
-        Dim strFilename As String
         strFilename = swModel.GetPathName
         strFilename = Left(strFilename, Len(strFilename) - 6) & "pdf"
         Set swExportPDFData = swApp.GetExportFileData(1)
         swModel.Extension.SaveAs strFilename, 0, 0, swExportPDFData, 0, 0
         FileToWrite.WriteLine "---PDF===" & strFilename
     End If
+End If
     
     
     
@@ -278,9 +348,38 @@ Sub OpenRunFile()
     
     Do While Not txtStream.AtEndOfStream
         Line = txtStream.ReadLine
+        If InStr(Line, IGNORETOOLBOX_HEADER) Then
+            Dim parts1 As Variant
+            parts1 = Split(Line, "=")
           
-        Debug.Print "Reading Line - " + Line
-        If processFiles And Not InStr(Line, "---EXTRACTED===") = 1 And Len(Line) > 1 Then
+            If UBound(parts1) >= 0 Then
+                If parts1(UBound(parts1)) = "True" Then
+                    IGNORETOOLBOX = True
+                End If
+            End If
+        End If
+        
+        If InStr(Line, UNSUPRESSASSEMBLY_HEADER) Then
+            Dim parts2 As Variant
+            parts2 = Split(Line, "=")
+            If UBound(parts2) >= 0 Then
+                If parts2(UBound(parts2)) = "True" Then
+                    UNSUPRESSASSEMBLY = True
+                End If
+            End If
+        End If
+        
+        If InStr(Line, DRAWINGSASPDFvDXF_HEADER) Then
+            Dim parts4 As Variant
+            parts4 = Split(Line, "=")
+            If UBound(parts4) >= 0 Then
+                If parts4(UBound(parts4)) = "True" Then
+                    DRAWINGSASPDFvDXF = True
+                End If
+            End If
+        End If
+
+        If processFiles And Not InStr(Line, "---EXTRACTED===") = 1 And Not InStr(Line, "---MIGRATED===") = 1 And Not InStr(Line, "---ERROR===") = 1 And Len(Line) > 1 Then
             currentFile = Line
         End If
         If Line = "---FILES" Then
