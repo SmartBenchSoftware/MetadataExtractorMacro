@@ -1,8 +1,9 @@
-' Copy into Solidworks macro editor - and hit run
+' version 1.1.0
 Dim swApp As Object
 Dim currentFile As String
 Dim swModel As SldWorks.ModelDoc2
 Dim runfilepath As String
+Dim tempFolder As String
 Dim runfilename As String
 Const ForReading = 1
 Const ForWriting = 2
@@ -13,28 +14,40 @@ Dim UNSUPRESSASSEMBLY As Boolean
 Dim IGNOREMISSING As Boolean
 Dim DRAWINGSASPDFvDXF As Boolean
 
+Dim UPDATEMACRO As Boolean
+
 Const IGNORETOOLBOX_HEADER = "IGNORETOOLBOX"
 Const UNSUPRESSASSEMBLY_HEADER = "UNSUPRESSASSEMBLY"
 Const DRAWINGSASPDFvDXF_HEADER = "DRAWINGSASPDFvDXF"
 
+Const RUNFILEVERSION_HEADER = "RUNFILEVERSION"
+Const RunfileVersion = "1.0"
+
 Dim FileSkipped As Boolean
+Dim FileError As Boolean
+
 
 Sub main()
     FileSkipped = False
     IGNORETOOLBOX = False
     UNSUPRESSASSEMBLY = False
     DRAWINGSASPDFvDXF = False
-    
+    UPDATEMACRO = False
     runfilename = "runfile.txt"
     runfilepath = Environ("AppData") + "\SmartBench Software\" + runfilename
-
+    tempFolder = Environ("AppData") + "\SmartBench Software\"
     Set swApp = Application.SldWorks
     
     Dim Running As Boolean
     Running = True
     
     While Running
-        OpenRunFile
+        OpenRunFile ""
+        
+        If UPDATEMACRO Then
+            MsgBox "Macro update required. Please download latest version, or update runfile."
+            Exit Sub
+        End If
         
         If currentFile = "" Then
             Running = False
@@ -43,20 +56,24 @@ Sub main()
             Debug.Print currentFile
             
             ' Open the target file in solidworks
-            
-            OpenTargetFile
+            OpenTargetFile ""
+           
         
             ' Update the run file to remove the specific entry
-            UpdateRunFile
+            UpdateRunFile ""
         End If
         FileSkipped = False
-        
+        FileError = False
         ' Reset current file
         currentFile = ""
     Wend
+    
+    
+    MsgBox "Metadata Extraction Complete"
+    Debug.Print "------ COMPLETE ------"
 End Sub
 
-Sub UpdateRunFile()
+Sub UpdateRunFile(dummy)
     Dim objFSO
     Const ForReading = 1
     Const ForWriting = 2
@@ -70,9 +87,10 @@ Sub UpdateRunFile()
     
     Debug.Print "Updating Runfile"
     Debug.Print FileSkipped
-    
-    If FileSkipped Then
-       strContents = Replace(strContents, currentFile, "---ERROR===" & currentFile)
+    If FileError Then
+        strContents = Replace(strContents, currentFile, "---ERROR===" & currentFile)
+    ElseIf FileSkipped Then
+       strContents = Replace(strContents, currentFile, "---SKIPPED===" & currentFile)
     Else
        strContents = Replace(strContents, currentFile, "---EXTRACTED===" & currentFile)
     End If
@@ -93,8 +111,8 @@ Function FileExtNoDot(str)
     FileExtNoDot = Right(str, Len(str) - InStrRev(str, "."))
 End Function
 
-Sub OpenTargetFile()
-
+Sub OpenTargetFile(dummy)
+    On Error GoTo Catch
 
     Set fso = CreateObject("Scripting.FileSystemObject")
     Debug.Print "Opening Target File"
@@ -108,7 +126,7 @@ Sub OpenTargetFile()
 
     
     Dim resultFile As String
-    resultFile = Replace(currentFile, FileExt(currentFile), "_" + FileExtNoDot(currentFile) + "_MMD.txt")
+    resultFile = tempFolder & GetFileNameWithoutExtension(currentFile) & "_" & FileExtNoDot(currentFile) & "_MMD.txt"
     If fso.FileExists(resultFile) Then
         Set FileToWrite = fso.OpenTextFile(resultFile, ForWriting)
     Else
@@ -116,24 +134,23 @@ Sub OpenTargetFile()
     End If
     
 
-    Dim fileerror As Long
+    Dim FileError As Long
     Dim filewarning As Long
     If LowerEndsWith(currentFile, "sldprt") Then
         Debug.Print "Opening part"
-        Set swModel = swApp.OpenDoc6(currentFile, swDocPART, swOpenDocOptions_Silent, "", fileerror, filewarning)
+        Set swModel = swApp.OpenDoc6(currentFile, swDocPART, swOpenDocOptions_Silent, "", FileError, filewarning)
         
-        Set modelDocExt = part.Extension
+        Set modelDocExt = swModel.Extension
         ret = modelDocExt.ToolboxPartType
+        Debug.Print ret
         If IGNORETOOLBOX And ret > 0 Then
             FileSkipped = True
             Debug.Print "Skipping toolbox File" + currentFile
             Exit Sub
         End If
-        
-        
     ElseIf LowerEndsWith(currentFile, "sldasm") Then
         Debug.Print "Opening assembly"
-        Set swModel = swApp.OpenDoc6(currentFile, swDocASSEMBLY, swOpenDocOptions_Silent, "", fileerror, filewarning)
+        Set swModel = swApp.OpenDoc6(currentFile, swDocASSEMBLY, swOpenDocOptions_Silent, "", FileError, filewarning)
         If UNSUPRESSASSEMBLY Then
             vComponents = swModel.GetComponents(True)
     
@@ -151,7 +168,7 @@ Sub OpenTargetFile()
         
     ElseIf LowerEndsWith(currentFile, "slddrw") Then
         Debug.Print "Opening drawing"
-        Set swModel = swApp.OpenDoc6(currentFile, swDocDRAWING, swOpenDocOptions_Silent, "", fileerror, filewarning)
+        Set swModel = swApp.OpenDoc6(currentFile, swDocDRAWING, swOpenDocOptions_Silent, "", FileError, filewarning)
     End If
     
     
@@ -193,7 +210,7 @@ Sub OpenTargetFile()
         FileToWrite.WriteLine "---PROPERTY===" & vPropNames(j) & "---VALUE===" & vPropValues(j)
     Next j
     
-    FileToWrite.WriteLine "---PROPERTY===" & "{filename}" & "---VALUE===" & Dir(currentFile)
+    FileToWrite.WriteLine "---PROPERTY===" & "{filename}" & "---VALUE===" & GetFileNameWithoutExtension(currentFile)
     FileToWrite.WriteLine "---PROPERTY===" & "{title}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoTitle)
     FileToWrite.WriteLine "---PROPERTY===" & "{subject}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoSubject)
     FileToWrite.WriteLine "---PROPERTY===" & "{savedate}" & "---VALUE===" & swModel.SummaryInfo(swSumInfoSaveDate)
@@ -205,61 +222,114 @@ Sub OpenTargetFile()
 
     Dim tempfile As String
     tempfile = ""
-    If (swModel.GetType = swDocPART) Then
+    If (swModel.GetType = swDocPART) Or (swModel.GetType = swDocASSEMBLY) Then
         ' Get all of the configurations
         ' Save out as temp files
         ' Add configurations to the metadata
         Dim value As Integer
         configNames = swModel.GetConfigurationNames
-        If UBound(configNames) > 1 Then
+        
+        Dim configPropMgr As CustomPropertyManager
+        Dim vConfPropNames As Variant
+        Dim vConfPropTypes As Variant
+        Dim vConfPropValues As Variant
+        Dim vConfResolved As Variant
+        Dim vConfLinkProp As Variant
+        Dim lRetConf As Long
+        Dim jConf As Long
+        Dim swRootComp As SldWorks.Component2
+        Dim swConf As SldWorks.Configuration
+        If UBound(configNames) > 0 Then
             For i = 0 To UBound(configNames)
-                configName = configNames(i)
-                swModel.ShowConfiguration2 configName
+                ConfigName = configNames(i)
+                swModel.ShowConfiguration2 ConfigName
                 
-                tempfile = Replace(currentFile, FileExt(currentFile), "_" + configName + FileExt(currentFile))
+                ' Save configuration copy to tempFolder instead of alongside the source file
+                tempfile = tempFolder & GetFileNameWithoutExtension(currentFile) & "_" & SanitizeFileNamePart(ConfigName) & FileExt(currentFile)
                 
                 value = swModel.SaveAsSilent(tempfile, True)
                 ' Activate the config
                 ' Make a new tempfile
                 ' Save a copy
-                FileToWrite.WriteLine "---CONFIGURATION===" & configName & "---PATH===" & tempfile
+                FileToWrite.WriteLine "---CONFIGURATION===" & ConfigName & "---PATH===" & tempfile
+                ' Write all the configured props
+          
+    
+                Set configPropMgr = swExtension.CustomPropertyManager(ConfigName)
+                lRetConf = configPropMgr.GetAll3(vConfPropNames, vConfPropTypes, vConfPropValues, vConfResolved, vConfLinkProp)
+                
+                If IsArray(vConfPropNames) Then
+                    For jConf = 0 To UBound(vConfPropNames)
+                        FileToWrite.WriteLine "---CONFIGUREDPROP===" & ConfigName & "---PROPERTY===" & vConfPropNames(jConf) & "---VALUE===" & vConfPropValues(jConf)
+                    Next jConf
+                End If
+                
+                 If (swModel.GetType = swDocASSEMBLY) Then
+                    Debug.Print "Reading Assembly"
+
+                    Set swConf = swModel.GetActiveConfiguration
+                    Set swRootComp = swConf.GetRootComponent
+                    OutputCompXform swRootComp, FileToWrite, ("" & ConfigName)
+                End If
+                
+                
             Next i
+        Else
+                ConfigName = "default"
+          
+                ' Save configuration copy to tempFolder instead of alongside the source file
+                tempfile = tempFolder & GetFileNameWithoutExtension(currentFile) & "_" & ConfigName & FileExt(currentFile)
+                
+                value = swModel.SaveAsSilent(tempfile, True)
+                ' Activate the config
+                ' Make a new tempfile
+                ' Save a copy
+                FileToWrite.WriteLine "---CONFIGURATION===" & ConfigName & "---PATH===" & tempfile
+                ' Write all the configured props
+
+    
+                Set configPropMgr = swExtension.CustomPropertyManager("")
+                lRetConf = configPropMgr.GetAll3(vConfPropNames, vConfPropTypes, vConfPropValues, vConfResolved, vConfLinkProp)
+                
+                If IsArray(vConfPropNames) Then
+                    For jConf = 0 To UBound(vConfPropNames)
+                        FileToWrite.WriteLine "---CONFIGUREDPROP===" & ConfigName & "---PROPERTY===" & vConfPropNames(jConf) & "---VALUE===" & vConfPropValues(jConf)
+                    Next jConf
+                End If
+                
+                 If (swModel.GetType = swDocASSEMBLY) Then
+                    Debug.Print "Reading Assembly"
+
+                    Set swConf = swModel.GetActiveConfiguration
+                    Set swRootComp = swConf.GetRootComponent
+                    OutputCompXform swRootComp, FileToWrite, ("" & ConfigName)
+            End If
         End If
-      
         
         
-    ElseIf (swModel.GetType = swDocASSEMBLY) Then
-        Debug.Print "Reading Assembly"
-        Dim swRootComp As SldWorks.Component2
-        Dim swConf As SldWorks.Configuration
-        Set swConf = swModel.GetActiveConfiguration
-        Set swRootComp = swConf.GetRootComponent
-        OutputCompXform swRootComp, FileToWrite
-        
-ElseIf (swModel.GetType = swDocDRAWING) Then
+       
+    ElseIf (swModel.GetType = swDocDRAWING) Then
     ' Output drawing data
-    Dim strFilename As String
-
-    If Not DRAWINGSASPDFvDXF Then
-        ' Export to DXF
-         Dim nErrors As Long
-         Dim nWarnings As Long
-
-        strFilename = swModel.GetPathName
-        strFilename = Left(strFilename, Len(strFilename) - 6) & "dxf"
-        Debug.Print strFilename
-        swModel.Extension.SaveAs3 strFilename, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, Nothing, nErrors, nWarnings
-        FileToWrite.WriteLine "---PDF===" & strFilename
-    Else
-        ' Export to PDF
-        Dim swExportPDFData As SldWorks.ExportPdfData
-        strFilename = swModel.GetPathName
-        strFilename = Left(strFilename, Len(strFilename) - 6) & "pdf"
-        Set swExportPDFData = swApp.GetExportFileData(1)
-        swModel.Extension.SaveAs strFilename, 0, 0, swExportPDFData, 0, 0
-        FileToWrite.WriteLine "---PDF===" & strFilename
+        Dim strFilename As String
+    
+        If Not DRAWINGSASPDFvDXF Then
+            ' Export to DXF in tempFolder
+             Dim nErrors As Long
+             Dim nWarnings As Long
+    
+            strFilename = tempFolder & GetFileNameWithoutExtension(swModel.GetPathName) & ".dxf"
+            Debug.Print strFilename
+            swModel.Extension.SaveAs3 strFilename, swSaveAsCurrentVersion, swSaveAsOptions_Silent, Nothing, Nothing, nErrors, nWarnings
+            FileToWrite.WriteLine "---PDF===" & strFilename
+        Else
+            ' Export to PDF in tempFolder
+            Dim swExportPDFData As SldWorks.ExportPdfData
+            strFilename = tempFolder & GetFileNameWithoutExtension(swModel.GetPathName) & ".pdf"
+            Set swExportPDFData = swApp.GetExportFileData(1)
+            swModel.Extension.SaveAs strFilename, 0, 0, swExportPDFData, 0, 0
+            FileToWrite.WriteLine "---PDF===" & strFilename
+        End If
     End If
-End If
     
     
     
@@ -272,8 +342,26 @@ End If
     FileToWrite.Close
     
     
-    
+Catch:
+    Debug.Print "Error with file"
+    FileError = True
 End Sub
+
+Function GetFileNameWithoutExtension(ByVal fullPath As String) As String
+    If fullPath = "" Then
+        GetFileNameWithoutExtension = ""
+        Exit Function
+    End If
+    Dim fname As String
+    fname = Mid(fullPath, InStrRev(fullPath, "\") + 1)   ' filename with extension
+    Dim pos As Long
+    pos = InStrRev(fname, ".")
+    If pos > 0 Then
+        GetFileNameWithoutExtension = Left$(fname, pos - 1)
+    Else
+        GetFileNameWithoutExtension = fname
+    End If
+End Function
 
 Function LowerEndsWith(strInput As String, suffix As String) As Boolean
     ' Returns True if the lowercase version of strInput ends with "sldprt"
@@ -282,7 +370,7 @@ Function LowerEndsWith(strInput As String, suffix As String) As Boolean
     LowerEndsWith = (Right(lowerStr, Len(suffix)) = suffix)
 End Function
 
-Sub OutputCompXform(swComp As SldWorks.Component2, FileToWrite As Variant)
+Sub OutputCompXform(swComp As SldWorks.Component2, FileToWrite As Variant, ConfigName As String)
 
     Dim vChild                      As Variant
     Dim swChildComp                 As SldWorks.Component2
@@ -300,7 +388,7 @@ Sub OutputCompXform(swComp As SldWorks.Component2, FileToWrite As Variant)
         Set swChildComp = vChild(i)
         Set swCompXform = swChildComp.Transform2
         vXform = swCompXform.ArrayData
-        FileToWrite.WriteLine "---COMPONENT===" & swChildComp.Name2 & "---PATH===" & swChildComp.GetPathName + "---TRANSFORM===" & str(vXform(0)) + ", " & str(vXform(1)) + ", " & str(vXform(2)) + ", " & str(vXform(3)) + ", " & str(vXform(4)) + ", " & str(vXform(5)) + ", " & str(vXform(6)) + ", " & str(vXform(7)) + ", " & str(vXform(8)) + ", " & str(vXform(9)) + ", " & str(vXform(10)) + ", " & str(vXform(11)) + ", " & str(vXform(12)) + ", " & str(vXform(13)) + ", " & str(vXform(14)) + ", " & str(vXform(15))
+        FileToWrite.WriteLine "---CONFIGUREDCOMP===" & ConfigName & "---COMPONENT===" & swChildComp.Name2 & "---PATH===" & swChildComp.GetPathName & "---COMPCONFIG===" & swChildComp.ReferencedConfiguration + "---TRANSFORM===" & str(vXform(0)) + ", " & str(vXform(1)) + ", " & str(vXform(2)) + ", " & str(vXform(3)) + ", " & str(vXform(4)) + ", " & str(vXform(5)) + ", " & str(vXform(6)) + ", " & str(vXform(7)) + ", " & str(vXform(8)) + ", " & str(vXform(9)) + ", " & str(vXform(10)) + ", " & str(vXform(11)) + ", " & str(vXform(12)) + ", " & str(vXform(13)) + ", " & str(vXform(14)) + ", " & str(vXform(15))
         Debug.Print "Component = " & swChildComp.Name2 & " (" & swChildComp.ReferencedConfiguration & ")"
         AppendRunFileComponent swChildComp.GetPathName
     Next i
@@ -320,8 +408,8 @@ Sub AppendRunFileComponent(path As String)
     strContents = objTS.ReadAll
     objTS.Close
     
-    Pos = InStr(1, strContents, path)
-    If Pos = 0 Then
+    pos = InStr(1, strContents, path)
+    If pos = 0 Then
         Set objTS = objFSO.OpenTextFile(runfilepath, ForAppending)
         objTS.WriteLine path
         objTS.Close
@@ -333,7 +421,7 @@ Sub AppendRunFileComponent(path As String)
 
 End Sub
 
-Sub OpenRunFile()
+Sub OpenRunFile(dummy)
     currentFile = ""
     Debug.Print "Reading Run File"
 
@@ -378,8 +466,18 @@ Sub OpenRunFile()
                 End If
             End If
         End If
+        
+         If InStr(Line, RUNFILEVERSION_HEADER) Then
+            Dim parts5 As Variant
+            parts5 = Split(Line, "=")
+            If UBound(parts5) >= 0 Then
+                If parts5(UBound(parts5)) <> RunfileVersion Then
+                    UPDATEMACRO = True
+                End If
+            End If
+        End If
 
-        If processFiles And Not InStr(Line, "---EXTRACTED===") = 1 And Not InStr(Line, "---MIGRATED===") = 1 And Not InStr(Line, "---ERROR===") = 1 And Len(Line) > 1 Then
+        If processFiles And Not InStr(Line, "===") > 1 And Len(Line) > 1 Then
             currentFile = Line
         End If
         If Line = "---FILES" Then
@@ -390,3 +488,29 @@ Sub OpenRunFile()
 
 
 End Sub
+
+Function SanitizeFileNamePart(ByVal value As String) As String
+    Dim invalidChars As Variant
+    Dim ch As Variant
+    Dim result As String
+    
+    result = Trim$(value)
+    
+    invalidChars = Array("\", "/", ":", "*", "?", """", "<", ">", "|")
+    
+    For Each ch In invalidChars
+        result = Replace(result, CStr(ch), "_")
+    Next ch
+    
+    Do While InStr(result, "__") > 0
+        result = Replace(result, "__", "_")
+    Loop
+    
+    result = Trim$(result)
+    
+    If result = "" Then
+        result = "default"
+    End If
+    
+    SanitizeFileNamePart = result
+End Function
