@@ -1,4 +1,4 @@
-' version 1.1.0
+' version 1.2.0
 Dim swApp As Object
 Dim currentFile As String
 Dim swModel As SldWorks.ModelDoc2
@@ -227,6 +227,8 @@ Sub OpenTargetFile(dummy)
         ' Save out as temp files
         ' Add configurations to the metadata
         Dim value As Integer
+        Dim configNames As Variant
+        Dim ConfigName As String
         configNames = swModel.GetConfigurationNames
         
         Dim configPropMgr As CustomPropertyManager
@@ -239,73 +241,36 @@ Sub OpenTargetFile(dummy)
         Dim jConf As Long
         Dim swRootComp As SldWorks.Component2
         Dim swConf As SldWorks.Configuration
-        If UBound(configNames) > 0 Then
-            For i = 0 To UBound(configNames)
-                ConfigName = configNames(i)
+        
+        If IsArray(configNames) Then
+            For i = LBound(configNames) To UBound(configNames)
+                ConfigName = CStr(configNames(i))
                 swModel.ShowConfiguration2 ConfigName
                 
                 ' Save configuration copy to tempFolder instead of alongside the source file
                 tempfile = tempFolder & GetFileNameWithoutExtension(currentFile) & "_" & SanitizeFileNamePart(ConfigName) & FileExt(currentFile)
                 
                 value = swModel.SaveAsSilent(tempfile, True)
-                ' Activate the config
-                ' Make a new tempfile
-                ' Save a copy
                 FileToWrite.WriteLine "---CONFIGURATION===" & ConfigName & "---PATH===" & tempfile
-                ' Write all the configured props
-          
-    
+                
+                ' Read configuration-specific properties
                 Set configPropMgr = swExtension.CustomPropertyManager(ConfigName)
                 lRetConf = configPropMgr.GetAll3(vConfPropNames, vConfPropTypes, vConfPropValues, vConfResolved, vConfLinkProp)
                 
                 If IsArray(vConfPropNames) Then
-                    For jConf = 0 To UBound(vConfPropNames)
+                    For jConf = LBound(vConfPropNames) To UBound(vConfPropNames)
                         FileToWrite.WriteLine "---CONFIGUREDPROP===" & ConfigName & "---PROPERTY===" & vConfPropNames(jConf) & "---VALUE===" & vConfPropValues(jConf)
                     Next jConf
                 End If
                 
-                 If (swModel.GetType = swDocASSEMBLY) Then
+                If (swModel.GetType = swDocASSEMBLY) Then
                     Debug.Print "Reading Assembly"
-
                     Set swConf = swModel.GetActiveConfiguration
                     Set swRootComp = swConf.GetRootComponent
-                    OutputCompXform swRootComp, FileToWrite, ("" & ConfigName)
+                    OutputCompXform swRootComp, FileToWrite, ConfigName
                 End If
-                
-                
             Next i
-        Else
-                ConfigName = "default"
-          
-                ' Save configuration copy to tempFolder instead of alongside the source file
-                tempfile = tempFolder & GetFileNameWithoutExtension(currentFile) & "_" & ConfigName & FileExt(currentFile)
-                
-                value = swModel.SaveAsSilent(tempfile, True)
-                ' Activate the config
-                ' Make a new tempfile
-                ' Save a copy
-                FileToWrite.WriteLine "---CONFIGURATION===" & ConfigName & "---PATH===" & tempfile
-                ' Write all the configured props
-
-    
-                Set configPropMgr = swExtension.CustomPropertyManager("")
-                lRetConf = configPropMgr.GetAll3(vConfPropNames, vConfPropTypes, vConfPropValues, vConfResolved, vConfLinkProp)
-                
-                If IsArray(vConfPropNames) Then
-                    For jConf = 0 To UBound(vConfPropNames)
-                        FileToWrite.WriteLine "---CONFIGUREDPROP===" & ConfigName & "---PROPERTY===" & vConfPropNames(jConf) & "---VALUE===" & vConfPropValues(jConf)
-                    Next jConf
-                End If
-                
-                 If (swModel.GetType = swDocASSEMBLY) Then
-                    Debug.Print "Reading Assembly"
-
-                    Set swConf = swModel.GetActiveConfiguration
-                    Set swRootComp = swConf.GetRootComponent
-                    OutputCompXform swRootComp, FileToWrite, ("" & ConfigName)
-            End If
         End If
-        
         
        
     ElseIf (swModel.GetType = swDocDRAWING) Then
